@@ -1,0 +1,13 @@
+# 忽略环境变量文件
+.env
+
+# 忽略 Node.js 依赖目录
+node_modules/
+
+# 忽略操作系统生成的文件
+.DS_Store
+Thumbs.db
+
+# 忽略 IDE/编辑器特定的文件
+.vscode/
+*.swp
