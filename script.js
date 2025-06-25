@@ -1,4 +1,13 @@
 document.addEventListener('DOMContentLoaded', () => {
+    // 配置 marked.js
+    marked.setOptions({
+        breaks: true, // 将回车符渲染为 <br>
+        gfm: true, // 启用 GitHub Flavored Markdown
+        highlight: function(code, lang) {
+            const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+            return hljs.highlight(code, { language }).value;
+        }
+    });
     // 获取DOM元素
     const chatOutput = document.getElementById('chat-output');
     const userInput = document.getElementById('user-input');
@@ -12,6 +21,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveProfileButton = document.getElementById('save-profile-button');
     const newProfileButton = document.getElementById('new-profile-button');
     const deleteProfileButton = document.getElementById('delete-profile-button');
+    const downloadTemplateButton = document.getElementById('download-template-button');
+    const uploadConfigInput = document.getElementById('upload-config-input');
+    const uploadConfigButton = document.getElementById('upload-config-button');
     const profileNameInput = document.getElementById('profile-name-input');
     const apiProviderInput = document.getElementById('api-provider-input');
     const apiBaseUrlInput = document.getElementById('api-base-url-input');
@@ -24,16 +36,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileUploadButton = document.getElementById('file-upload-button');
     const fileUploadInput = document.getElementById('file-upload-input');
     const filePreviewContainer = document.getElementById('file-preview-container');
+    // HTML 预览模态窗口元素
+    const htmlPreviewModal = document.getElementById('html-preview-modal');
+    const htmlPreviewOverlay = document.getElementById('html-preview-overlay');
+    const closePreviewButton = document.getElementById('close-preview-button');
+    const htmlPreviewIframe = document.getElementById('html-preview-iframe');
 
     // 用于存储待发送的文件数据
     let attachedImageBase64 = null;
     let attachedImageType = null;
     let attachedFileContent = null; // 新增：用于存储文本文件内容
     let attachedFileName = null; // 新增：用于存储文件名
-
+    let conversationHistory = []; // 新增：用于存储对话历史
+    const MAX_HISTORY_LENGTH = 10; // 限制历史记录长度 (例如 10 条消息 = 5 轮对话)
 
     // --- 事件监听 ---
     sendButton.addEventListener('click', handleUserInput);
+    // 关闭 HTML 预览模态窗口
+    closePreviewButton.addEventListener('click', closeHtmlPreview);
+    htmlPreviewOverlay.addEventListener('click', closeHtmlPreview);
+
     userInput.addEventListener('keypress', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -68,30 +90,88 @@ document.addEventListener('DOMContentLoaded', () => {
                  clearAttachedData();
             }
             reader.readAsDataURL(file);
-        } else if (file.type === 'text/plain' || file.type === 'text/markdown' || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+        } else if (
+            file.type === 'text/plain' ||
+            file.type === 'text/markdown' ||
+            file.name.endsWith('.txt') ||
+            file.name.endsWith('.md')
+        ) {
             // 处理文本文件
             const reader = new FileReader();
             reader.onload = (e) => {
-                attachedFileContent = e.target.result;
-                displayTextPreview(file.name); // 显示文件名预览
+                attachedFileContent = e.target.result; // 存储文本内容
+                displayTextPreview(file.name, "文本文件");
             }
-             reader.onerror = () => {
-                 showStatus(`读取文本文件 "${file.name}" 时出错`, true);
-                 clearAttachedData();
+            reader.onerror = () => {
+                showStatus(`读取文本文件 "${file.name}" 时出错`, true);
+                clearAttachedData();
             }
             reader.readAsText(file);
+        } else if (
+            file.type === 'application/pdf' ||
+            file.name.endsWith('.pdf')
+        ) {
+            // 处理 PDF 文件
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const arrayBuffer = e.target.result;
+                try {
+                    // 设置 worker 路径，pdf.js 需要这个来加载 worker
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.worker.min.js`;
+                    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                    let fullText = '';
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        fullText += textContent.items.map(item => item.str).join(' ') + '\n';
+                    }
+                    attachedFileContent = fullText; // 存储 PDF 内容
+                    displayTextPreview(file.name, "PDF 文件 (内容已加载)");
+                    showStatus(`PDF 文件 "${file.name}" 内容已成功加载。`, false);
+                } catch (error) {
+                    showStatus(`解析 PDF 文件 "${file.name}" 时出错: ${error.message}`, true);
+                    clearAttachedData();
+                }
+            };
+            reader.onerror = () => {
+                showStatus(`读取 PDF 文件 "${file.name}" 时出错`, true);
+                clearAttachedData();
+            };
+            reader.readAsArrayBuffer(file);
+        } else if (
+            file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+            file.name.endsWith('.docx') ||
+            file.type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+            file.name.endsWith('.xlsx')
+        ) {
+            // 处理 Word, Excel 文件 - 仅预览文件名
+            attachedFileContent = null; // 不读取这些文件的内容到此变量
+            let fileTypeDescription = "文件";
+            if (file.name.endsWith('.docx')) fileTypeDescription = "Word 文档";
+            else if (file.name.endsWith('.xlsx')) fileTypeDescription = "Excel 表格";
+            displayTextPreview(file.name, fileTypeDescription); // 显示文件名预览，并传递类型描述
         } else {
             // 不支持的文件类型
-            showStatus(`不支持的文件类型: ${file.type || '未知'}`, true);
+            showStatus(`不支持的文件类型: ${file.type || '未知'} (${file.name})`, true);
             attachedFileName = null; // 清除非支持文件的名称
-             clearAttachedData(); // 确保清除所有状态
+            clearAttachedData(); // 确保清除所有状态
         }
-         // 清空 input 的值，以便可以再次选择同一个文件
+        // 清空 input 的值，以便可以再次选择同一个文件
         fileUploadInput.value = '';
     });
 
 
     // --- 函数定义 ---
+
+    /**
+     * 将消息（HTML或纯文本）附加到聊天窗口
+     * @param {string} content 要显示的内容 (可以是 HTML)
+     * @param {string} sender 'user' 或 'model'
+     * @param {string} [messageId=null] 可选的消息元素ID，用于后续更新
+     * @returns {HTMLElement} 返回创建的消息元素
+     */
+
+
 
     /**
      * 显示图片预览
@@ -112,12 +192,13 @@ document.addEventListener('DOMContentLoaded', () => {
      /**
       * 显示文本文件预览 (文件名)
       * @param {string} fileName 文件名
+      * @param {string} fileTypeDescription 文件类型描述 (例如 "文本文件", "PDF")
       */
-     function displayTextPreview(fileName) {
+     function displayTextPreview(fileName, fileTypeDescription = "文件") {
         filePreviewContainer.innerHTML = ''; // 清空旧预览
         const span = document.createElement('span');
         span.textContent = fileName;
-        span.title = `文本文件: ${fileName} (点击移除)`;
+        span.title = `${fileTypeDescription}: ${fileName} (点击移除)`;
         span.classList.add('preview-filename');
         span.onclick = () => clearAttachedData();
         filePreviewContainer.appendChild(span);
@@ -160,6 +241,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
             displayMessage(displayText, 'user'); // 显示用户输入（可能包含附件提示）
 
+            // --- 构建用户消息并添加到历史记录 ---
+            const userMessageContent = [];
+            // 组合文本和文件内容作为文本部分
+            let combinedTextForHistory = inputText || "";
+            if (attachedFileContent) { // 纯文本文件内容
+                combinedTextForHistory = `文件 "${attachedFileName}" (文本内容):\n${attachedFileContent}\n\n---\n\n${combinedTextForHistory}`;
+            } else if (attachedFileName && !attachedImageBase64) { // 其他类型的文件，仅有文件名
+                combinedTextForHistory = `[已附加文件: ${attachedFileName}]\n\n${combinedTextForHistory}`;
+            }
+
+            if (combinedTextForHistory || attachedImageBase64) { // 如果有文本或图片，则添加text部分
+                 userMessageContent.push({ type: "text", text: combinedTextForHistory.trim() });
+            }
+            
+            // 添加图片
+            if (attachedImageBase64 && attachedImageType) {
+                 userMessageContent.push({
+                     type: "image_url",
+                     image_url: { "url": `data:${attachedImageType};base64,${attachedImageBase64}` }
+                 });
+            }
+
+            if (userMessageContent.length > 0) {
+                conversationHistory.push({ role: "user", content: userMessageContent });
+                console.log("User message added to history:", conversationHistory[conversationHistory.length - 1]);
+            }
+
+            // --- 截断历史记录 ---
+            if (conversationHistory.length > MAX_HISTORY_LENGTH) {
+                // 保留最新的 MAX_HISTORY_LENGTH 条记录
+                conversationHistory = conversationHistory.slice(-MAX_HISTORY_LENGTH);
+                console.log(`History truncated to last ${MAX_HISTORY_LENGTH} messages.`);
+            }
+
              // 如果有图片预览，也显示在消息流中（可选）
             if (attachedImageBase64) {
                 const imgElement = document.createElement('img');
@@ -180,11 +295,13 @@ document.addEventListener('DOMContentLoaded', () => {
             adjustTextareaHeight();
 
             // 调用API函数，传递文本、图片和文件内容
-            // 在调用 API 之前禁用发送按钮
+            // 在调用 API 之前禁用发送按钮并更改文本
             sendButton.disabled = true;
-            callLLMApi(inputText, attachedImageBase64, attachedImageType, attachedFileContent);
+            sendButton.textContent = '思考中...'; // 更改按钮文本
+            // 传递整个对话历史给 API 调用函数
+            callLLMApi(conversationHistory);
 
-            // 清除已附加的文件数据和预览
+            // 清除已附加的文件数据和预览 (因为它们已被添加到历史记录)
             clearAttachedData();
 
 
@@ -196,84 +313,120 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
-     * 调用大模型API (处理文本、图片、文本文件)
-     * @param {string} prompt 用户输入的提示
-     * @param {string | null} imageBase64 Base64编码的图片数据 (无前缀)
-     * @param {string | null} imageType 图片的MIME类型 (例如 image/jpeg)
-     * @param {string | null} fileContent 文本文件的内容
-     */
-    async function callLLMApi(prompt, imageBase64, imageType, fileContent) {
-        displayMessage("思考中...", 'model', true);
+     * 调用大模型API (处理对话历史)
+     * @param {Array<object>} history 当前的对话历史记录 (messages 格式)
+    */
+    async function callLLMApi(history) { // <-- Change signature
+        // 创建一个占位的模型消息元素用于流式显示或直接模式的最终显示
+        const modelMessageElement = displayMessage("", 'model', true); // isThinking=true initially
+        let fullModelReply = ""; // 用于累积完整的模型回复 (流式或直接)
 
         const selectedConnectionMode = document.querySelector('input[name="connection-mode"]:checked').value;
         const currentBaseUrl = apiBaseUrlInput.value.trim();
         const currentApiKey = apiKeyInput.value.trim();
         const currentModel = apiModelInput.value.trim() || 'gpt-3.5-turbo';
 
-        // --- 构建最终发送给模型的文本 prompt ---
-        let combinedPrompt = prompt || ""; // 开始时是用户输入的文本
-        if (fileContent) {
-            // 如果有文本文件内容，将其添加到 prompt 前面或后面
-            // 为模型提供上下文，说明这是文件内容
-            combinedPrompt = `文件 "${attachedFileName}" 的内容如下：\n\n${fileContent}\n\n---\n\n${combinedPrompt}`;
-             console.log(`已将文件 "${attachedFileName}" 内容添加到 Prompt。`);
-        }
-        // 注意：需要检查组合后的 prompt 是否过长，可能需要截断 fileContent
-
         try {
-            let modelReply = null;
-
             if (selectedConnectionMode === 'backend') {
-                // --- 模式1：通过本地服务器代理 ---
+                // --- 模式1：通过本地服务器代理 (流式处理) ---
                 const backendApiUrl = 'http://localhost:3000/api/chat';
-                 // 发送给后端的数据结构
-                 const requestBody = {
-                    prompt: combinedPrompt, // 发送组合后的 prompt
-                    model: currentModel,
-                    ...(currentBaseUrl && { baseUrl: currentBaseUrl }),
-                    ...(imageBase64 && { imageBase64: imageBase64, imageType: imageType }) // 图片数据
-                    // 注意：如果后端也处理 fileContent，则在此处添加
-                };
-                console.log(`通过后端 ${backendApiUrl} 发送请求`, requestBody);
+                const requestBody = {
+                   model: currentModel,
+                   ...(currentBaseUrl && { baseUrl: currentBaseUrl }),
+                   messages: history
+               };
+                console.log(`通过后端 ${backendApiUrl} 发送流式请求`, requestBody);
 
-                const response = await fetch(backendApiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestBody)
-                });
+               const response = await fetch(backendApiUrl, {
+                   method: 'POST',
+                   headers: { 'Content-Type': 'application/json' },
+                   body: JSON.stringify(requestBody)
+               });
 
-                if (!response.ok) {
+               if (!response.ok) {
+                    // 尝试解析错误体，后端可能在流开始前返回错误
                     let errorData;
                     try { errorData = await response.json(); } catch (e) { errorData = { message: response.statusText }; }
-                    throw new Error(`后端错误: ${response.status} - ${errorData.error || errorData.message}`);
-                }
-                const data = await response.json();
-                modelReply = data.reply;
+                    throw new Error(`后端错误(非流式): ${response.status} - ${errorData.error || errorData.message}`);
+               }
+               if (!response.body) {
+                    throw new Error("后端响应没有流式主体");
+               }
+
+               // --- 处理流 ---
+               const reader = response.body.getReader();
+               const decoder = new TextDecoder();
+               let buffer = '';
+               modelMessageElement.classList.remove('thinking-message'); // 移除思考样式
+               modelMessageElement.textContent = ''; // 清空占位符
+
+               while (true) {
+                   const { value, done } = await reader.read();
+                   if (done) {
+                        console.log("Stream reader finished.");
+                        // 确保处理完缓冲区最后的内容
+                        if (buffer.startsWith('data: ')) {
+                             const dataStr = buffer.substring(6);
+                             if (dataStr === '[DONE]') { /* Handled */ }
+                             else {
+                                  try {
+                                       const parsedData = JSON.parse(dataStr);
+                                       if (parsedData.delta) {
+                                            fullModelReply += parsedData.delta;
+                                            displayMessage(fullModelReply, 'model', false, false, modelMessageElement); // Update existing element
+                                       }
+                                  } catch (e) { console.error("Error parsing final SSE buffer:", e, "Data:", dataStr); }
+                             }
+                        }
+                        break;
+                   };
+
+                   buffer += decoder.decode(value, { stream: true });
+                   const lines = buffer.split('\n\n');
+                   buffer = lines.pop() || '';
+
+                   for (const line of lines) {
+                       if (line.startsWith('data: ')) {
+                           const dataStr = line.substring(6).trim();
+                           if (dataStr === '[DONE]') {
+                               console.log("Received [DONE] signal.");
+                               // [DONE] 信号表示结束，不再处理后续，历史记录在循环结束后添加
+                           } else {
+                               try {
+                                   const parsedData = JSON.parse(dataStr);
+                                   if (parsedData.delta) {
+                                       fullModelReply += parsedData.delta;
+                                       displayMessage(fullModelReply, 'model', false, false, modelMessageElement); // Update existing element
+                                   }
+                               } catch (e) { console.error("Error parsing SSE data:", e, "Data:", dataStr); }
+                           }
+                       } else if (line.startsWith('event: error')) {
+                            const errorDataLine = lines.find(l => l.startsWith('data: '));
+                            let errorMessage = '流处理时发生未知错误';
+                            if(errorDataLine) {
+                                const errorDataStr = errorDataLine.substring(6).trim();
+                                try {
+                                     const errorJson = JSON.parse(errorDataStr);
+                                     errorMessage = `流处理错误: ${errorJson.message || '未知错误'}`;
+                                } catch (e) { errorMessage = `流处理错误: 无法解析错误数据 ${errorDataStr}`; }
+                            }
+                            console.error(errorMessage);
+                            displayMessage(errorMessage, 'model', false, true, modelMessageElement); // Display error in the message element
+                            throw new Error(errorMessage); // 抛出错误以停止处理并进入 catch
+                       }
+                   }
+               }
+               // 流正常结束后，添加完整历史记录
+               if (fullModelReply) {
+                    conversationHistory.push({ role: "assistant", content: fullModelReply });
+                    console.log("Assistant message added to history after stream:", conversationHistory[conversationHistory.length - 1]);
+               }
+
 
             } else if (selectedConnectionMode === 'direct') {
-                // --- 模式2：直接浏览器连接 ---
+                // --- 模式2：直接浏览器连接 (保持非流式) ---
                 if (!currentApiKey) throw new Error("请在设置中输入 API Key 以使用直接连接模式。");
                 if (!currentBaseUrl) throw new Error("请在设置中输入 API 基础 URL 以使用直接连接模式。");
-
-                // 构建 OpenAI Vision API 的 messages 结构
-                const messages = [];
-                const userContent = [];
-                // 添加组合后的文本（包含文件内容）
-                if (combinedPrompt) {
-                    userContent.push({ type: "text", text: combinedPrompt });
-                }
-                 // 添加图片
-                if (imageBase64 && imageType) {
-                    userContent.push({
-                        type: "image_url",
-                        image_url: { "url": `data:${imageType};base64,${imageBase64}` }
-                    });
-                }
-                // 必须至少有文本或图片
-                 if (userContent.length === 0) {
-                      throw new Error("没有有效的文本或图片内容发送。");
-                 }
-                 messages.push({ role: "user", content: userContent });
 
                 const directApiUrl = currentBaseUrl.endsWith('/') ? `${currentBaseUrl}chat/completions` : `${currentBaseUrl}/chat/completions`;
                 console.log(`直接连接 ${directApiUrl} 发送请求，Model: ${currentModel}`);
@@ -281,15 +434,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const response = await fetch(directApiUrl, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${currentApiKey}`
-                    },
-                    body: JSON.stringify({
-                        model: currentModel,
-                        messages: messages,
-                        // max_tokens: 1000
-                    })
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentApiKey}` },
+                    body: JSON.stringify({ model: currentModel, messages: history })
                 });
 
                 if (!response.ok) {
@@ -299,65 +445,112 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(`直接 API 错误: ${response.status} - ${errorMessage}`);
                 }
                 const data = await response.json();
-                modelReply = data.choices?.[0]?.message?.content?.trim();
-            }
+                fullModelReply = data.choices?.[0]?.message?.content?.trim(); // Assign to fullModelReply
 
-            // --- 处理回复 ---
-            removeThinkingMessage();
-            if (modelReply) {
-                displayMessage(modelReply, 'model');
-            } else {
-                throw new Error(selectedConnectionMode === 'direct' ? "未能从 API 获取有效回复内容" : "从后端获取的回复无效或为空");
+                // --- 处理直接模式的回复 ---
+                // removeThinkingMessage(); // 移除思考占位符 (或更新 modelMessageElement) <-- 移除此行，displayMessage会处理
+                if (fullModelReply) {
+                     displayMessage(fullModelReply, 'model', false, false, modelMessageElement); // Update existing element
+                     // 将模型回复添加到历史记录
+                     conversationHistory.push({ role: "assistant", content: fullModelReply });
+                     console.log("Assistant message added to history (direct):", conversationHistory[conversationHistory.length - 1]);
+                } else {
+                     throw new Error("未能从 API 获取有效回复内容 (直接模式)");
+                }
             }
+            // 回复添加历史记录的逻辑已移到各自模式处理完成之后
 
         } catch (error) {
             console.error(`调用 API 时出错 (${selectedConnectionMode} 模式):`, error);
-            removeThinkingMessage();
-            displayMessage(`错误：无法获取模型回复 (${error.message})`, 'model', false, true);
-            // 如果是因为直接连接模式缺少配置，清除附件避免重复发送
-            if (selectedConnectionMode === 'direct' && (error.message.includes("API Key") || error.message.includes("基础 URL"))) {
-                 clearAttachedData();
-           }
-       } finally {
-           // 无论成功或失败，最终都重新启用发送按钮
-           sendButton.disabled = false;
-       }
-   }
+            // 尝试更新消息元素为错误状态，如果它还处于思考状态
+            if (modelMessageElement && modelMessageElement.classList.contains('thinking-message')) {
+                 displayMessage(`错误：无法获取模型回复 (${error.message})`, 'model', false, true, modelMessageElement);
+            } else if (!modelMessageElement){ // Should not happen normally
+                 displayMessage(`错误：无法获取模型回复 (${error.message})`, 'model', false, true);
+            }
+            // 不需要在 catch 中添加历史记录，成功的分支会处理
 
-   /**
+        } finally {
+            // 无论成功或失败，最终都重新启用发送按钮并恢复文本
+            sendButton.disabled = false;
+            sendButton.textContent = '发送'; // 恢复按钮文本
+        }
+    }
+
+    /**
      * 在聊天输出区显示消息
      * @param {string} text 消息内容
      * @param {'user' | 'model'} sender 发送者 ('user' 或 'model')
      * @param {boolean} [isThinking=false] 是否为思考状态消息
      * @param {boolean} [isError=false] 是否为错误消息
+     * @param {HTMLElement | null} [elementToUpdate=null] 如果提供，则更新此元素而不是创建新元素
      */
-    function displayMessage(text, sender, isThinking = false, isError = false) {
-        const messageElement = document.createElement('div');
-        messageElement.classList.add('message', `${sender}-message`);
+    function displayMessage(text, sender, isThinking = false, isError = false, elementToUpdate = null) {
+        const messageElement = elementToUpdate || document.createElement('div');
+
+        // 只有在创建新元素时才添加基础 class
+        if (!elementToUpdate) {
+            messageElement.classList.add('message', `${sender}-message`);
+        }
+
+        // 清理旧状态
+        messageElement.classList.remove('thinking-message', 'error-message');
+        messageElement.style.color = ''; // 重置颜色
+
         if (isThinking) {
             messageElement.classList.add('thinking-message');
-            messageElement.innerHTML = `<span class="thinking-dot">.</span><span class="thinking-dot">.</span><span class="thinking-dot">.</span> ${text}`;
+            // 使用 requestAnimationFrame 稍微延迟添加动画类，确保 CSS 过渡生效
+            requestAnimationFrame(() => {
+                 messageElement.innerHTML = `<span class="thinking-dot">.</span><span class="thinking-dot">.</span><span class="thinking-dot">.</span> ${text || '思考中...'}`;
+            });
         } else if (isError) {
             messageElement.classList.add('error-message');
             messageElement.style.color = 'red';
             messageElement.textContent = text;
         } else {
-             messageElement.style.whiteSpace = 'pre-wrap';
-             messageElement.textContent = text;
+            // 正常消息
+            messageElement.style.whiteSpace = 'pre-wrap';
+
+            if (sender === 'model') {
+                // 使用 marked.js 解析 Markdown，它会自动使用 hljs 进行语法高亮
+                messageElement.innerHTML = marked.parse(text);
+
+                // 后处理：查找所有 HTML 代码块并添加预览按钮
+                messageElement.querySelectorAll('pre code.language-html').forEach(codeBlock => {
+                    // 从 code 标签的 textContent 中提取纯 HTML 内容
+                    const htmlContent = codeBlock.textContent;
+
+                    // 创建并添加预览按钮
+                    const buttonContainer = document.createElement('div');
+                    buttonContainer.className = 'preview-button-container';
+                    const buttonElement = document.createElement('button');
+                    buttonElement.className = 'preview-html-button';
+                    buttonElement.innerHTML = `<span class="material-icons">visibility</span> 预览 HTML`;
+                    buttonElement.addEventListener('click', () => showHtmlPreview(htmlContent));
+                    buttonContainer.appendChild(buttonElement);
+
+                    // 将按钮容器插入到 <pre> 元素之后
+                    if (codeBlock.parentElement && codeBlock.parentElement.tagName === 'PRE') {
+                        codeBlock.parentElement.insertAdjacentElement('afterend', buttonContainer);
+                    }
+                });
+            } else { // 对于用户消息或其他非模型发送者
+                messageElement.textContent = text; // 保持简单，只显示纯文本
+            }
         }
-        chatOutput.appendChild(messageElement);
-        scrollToBottom();
+
+        // 只有在创建新元素时才添加到 DOM
+        if (!elementToUpdate) {
+             chatOutput.appendChild(messageElement);
+        }
+        // 仅在添加新消息或更新内容时滚动
+        if (!elementToUpdate || text) {
+             scrollToBottom();
+        }
+        return messageElement; // 返回元素引用
     }
 
-    /**
-     * 移除"思考中..."的消息
-     */
-    function removeThinkingMessage() {
-        const thinkingMsg = chatOutput.querySelector('.thinking-message');
-        if (thinkingMsg) {
-            chatOutput.removeChild(thinkingMsg);
-        }
-    }
+
 
     /**
      * 滚动聊天区域到底部
@@ -403,6 +596,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- HTML 预览模态窗口逻辑 ---
+    /**
+     * 显示 HTML 预览模态窗口
+     * @param {string} htmlContent 要预览的 HTML 内容
+     */
+    function showHtmlPreview(htmlContent) {
+        console.log("准备预览 HTML:", htmlContent.substring(0, 100) + "...");
+        // 清理可能的脚本注入（基本清理，更复杂的需要DOMPurify等库）
+        // const sanitizedHtml = htmlContent.replace(/<script.*?>.*?<\/script>/gi, ''); // 移除 script 标签
+        htmlPreviewIframe.srcdoc = htmlContent; // 直接使用 srcdoc 更安全，浏览器会处理沙箱
+        htmlPreviewModal.classList.remove('hidden');
+    }
+
+    /**
+     * 关闭 HTML 预览模态窗口
+     */
+    function closeHtmlPreview() {
+        htmlPreviewModal.classList.add('hidden');
+        htmlPreviewIframe.srcdoc = ''; // 清空内容
+    }
+    // 关闭按钮和遮罩层的事件监听已在前面添加 (lines 44-45)
+
+
     // --- 设置面板逻辑 ---
     const STORAGE_KEY = 'llmChatbotApiConfigs';
     const LAST_USED_PROFILE_KEY = 'llmChatbotLastProfile';
@@ -431,28 +647,62 @@ document.addEventListener('DOMContentLoaded', () => {
         deleteProfileButton.disabled = disable;
      }
 
-    function saveProfile(profileNameToSave) {
+    /**
+     * 保存单个配置对象到 localStorage
+     * @param {object} profileData - 包含配置信息的对象
+     * @returns {boolean} - 是否成功保存
+     */
+    function saveProfileData(profileData) {
+        if (!profileData || typeof profileData.profileName !== 'string' || profileData.profileName.trim() === '') {
+            console.warn("尝试保存的配置数据无效或缺少 profileName:", profileData);
+            return false;
+        }
+        const profileNameToSave = profileData.profileName.trim();
+        const profiles = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+
+        // 确保所有期望的字段都存在，如果不存在则使用默认值
+        profiles[profileNameToSave] = {
+            provider: profileData.provider || 'OpenAI Compatible',
+            baseUrl: profileData.baseUrl || '',
+            apiKey: profileData.apiKey || '',
+            model: profileData.model || 'gpt-3.5-turbo',
+            connectionMode: profileData.connectionMode || 'backend'
+        };
+
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
+        localStorage.setItem(LAST_USED_PROFILE_KEY, profileNameToSave); // 更新最后使用的配置
+        console.log("配置数据已保存:", profileNameToSave, profiles[profileNameToSave]);
+        return true;
+    }
+
+    /**
+     * 从当前表单保存配置
+     * @param {string} profileNameToSave - 要保存的配置名称
+     */
+    function saveCurrentFormAsProfile(profileNameToSave) {
         if (!profileNameToSave) {
             showStatus("错误：请输入配置名称！", true);
             profileNameInput.focus();
             return;
         }
-        const selectedConnectionMode = document.querySelector('input[name="connection-mode"]:checked').value;
-        const profiles = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-        profiles[profileNameToSave] = {
+        const currentProfileData = {
+            profileName: profileNameToSave,
             provider: apiProviderInput.value.trim(),
             baseUrl: apiBaseUrlInput.value.trim(),
             apiKey: apiKeyInput.value.trim(),
             model: apiModelInput.value.trim(),
-            connectionMode: selectedConnectionMode
+            connectionMode: document.querySelector('input[name="connection-mode"]:checked').value
         };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
-        localStorage.setItem(LAST_USED_PROFILE_KEY, profileNameToSave);
-        loadProfiles();
-        configProfileSelect.value = profileNameToSave;
-        showStatus(`配置 "${profileNameToSave}" 已保存!`);
-        console.log("配置已保存:", profileNameToSave, profiles[profileNameToSave]);
+
+        if (saveProfileData(currentProfileData)) {
+            loadProfiles(); // 重新加载下拉列表
+            configProfileSelect.value = profileNameToSave; // 选中刚保存的
+            showStatus(`配置 "${profileNameToSave}" 已保存!`);
+        } else {
+            showStatus(`配置 "${profileNameToSave}" 保存失败，请检查控制台。`, true);
+        }
     }
+
 
     function loadSelectedProfile() {
         const selectedProfileName = configProfileSelect.value;
@@ -568,12 +818,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- 设置面板事件监听 ---
     saveProfileButton.addEventListener('click', () => {
-        saveProfile(profileNameInput.value.trim());
+        saveCurrentFormAsProfile(profileNameInput.value.trim());
     });
     loadProfileButton.addEventListener('click', loadSelectedProfile);
     deleteProfileButton.addEventListener('click', deleteProfile);
     newProfileButton.addEventListener('click', handleNewProfile);
     configProfileSelect.addEventListener('change', loadSelectedProfile);
+    downloadTemplateButton.addEventListener('click', downloadConfigTemplate);
+    uploadConfigButton.addEventListener('click', () => uploadConfigInput.click());
+    uploadConfigInput.addEventListener('change', handleUploadConfigFile);
 
     // 添加一些初始提示或欢迎语 (可选)
     displayMessage("您好！我是AI助手，请问有什么可以帮您的吗？", 'model');
@@ -581,5 +834,123 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- 初始化 ---
     loadProfiles();
     loadLastUsedConfig();
+
+    // --- 新增功能函数 ---
+
+    /**
+     * 下载当前配置或一个空模板作为JSON文件
+     */
+    function downloadConfigTemplate() {
+        const profileNameToDownload = profileNameInput.value.trim();
+        const currentConfig = {
+            profileName: profileNameToDownload || "My New Config", // 如果当前名称为空，给个默认
+            provider: apiProviderInput.value.trim() || "OpenAI Compatible",
+            baseUrl: apiBaseUrlInput.value.trim(),
+            apiKey: apiKeyInput.value.trim(), // 通常模板不应包含真实密钥
+            model: apiModelInput.value.trim() || "gpt-3.5-turbo",
+            connectionMode: document.querySelector('input[name="connection-mode"]:checked').value || "backend"
+        };
+
+        // 对于下载的模板，可以考虑清空敏感信息如apiKey
+        const templateConfig = { ...currentConfig };
+        if (confirm("是否在模板中包含当前的API密钥？取消则模板中的API密钥将为空。")) {
+            // 用户选择包含，什么也不做
+        } else {
+            templateConfig.apiKey = ""; // 清空API密钥
+        }
+
+
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(templateConfig, null, 2));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        const downloadFileName = templateConfig.profileName ? `config_${templateConfig.profileName.replace(/\s+/g, '_')}.json` : "llm_config_template.json";
+        downloadAnchorNode.setAttribute("download", downloadFileName);
+        document.body.appendChild(downloadAnchorNode); // required for firefox
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+        showStatus(`配置模板 "${downloadFileName}" 已开始下载。`);
+        console.log("下载配置模板:", templateConfig);
+    }
+
+    /**
+     * 处理上传的配置文件
+     * @param {Event} event 文件输入框的change事件
+     */
+    function handleUploadConfigFile(event) {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+        if (file.type !== 'application/json') {
+            showStatus(`错误：请上传有效的JSON配置文件 (.json) 而不是 ${file.type || '未知类型'}`, true);
+            uploadConfigInput.value = ''; // 清空选择，以便可以再次选择
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const parsedJson = JSON.parse(e.target.result);
+                let configsToProcess = [];
+                let importedCount = 0;
+                let skippedCount = 0;
+
+                if (Array.isArray(parsedJson)) {
+                    configsToProcess = parsedJson;
+                } else if (typeof parsedJson === 'object' && parsedJson !== null) {
+                    configsToProcess = [parsedJson]; // 将单个对象视为单元素数组处理
+                } else {
+                    throw new Error("无效的JSON格式，既不是对象也不是数组。");
+                }
+
+                configsToProcess.forEach(configObject => {
+                    if (configObject && typeof configObject === 'object' &&
+                        configObject.profileName && typeof configObject.profileName === 'string' &&
+                        configObject.profileName.trim() !== '') {
+                        if (saveProfileData(configObject)) {
+                            importedCount++;
+                        } else {
+                            skippedCount++; // saveProfileData内部可能因其他验证失败（虽然目前较少）
+                        }
+                    } else {
+                        skippedCount++;
+                        console.warn("跳过无效或无名的配置对象:", configObject);
+                    }
+                });
+
+                if (importedCount > 0) {
+                    loadProfiles(); // 重新加载下拉列表
+                    // 尝试加载最后一个成功导入的配置到表单，或者第一个（如果LAST_USED_PROFILE_KEY被更新了）
+                    const lastUsedProfile = localStorage.getItem(LAST_USED_PROFILE_KEY);
+                    if (lastUsedProfile && configProfileSelect.querySelector(`option[value="${lastUsedProfile}"]`)) {
+                         configProfileSelect.value = lastUsedProfile;
+                         loadSelectedProfile(); // 加载到表单
+                    } else if (configProfileSelect.options.length > 0) {
+                        configProfileSelect.selectedIndex = 0; // 选择第一个
+                        loadSelectedProfile();
+                    } else {
+                        clearSettingsInputs(); // 如果没有可选项了，清空表单
+                    }
+                    showStatus(`${importedCount} 个配置已成功导入。${skippedCount > 0 ? skippedCount + ' 个配置因格式问题被跳过。' : ''}`);
+                } else if (skippedCount > 0) {
+                    showStatus(`未能导入任何配置。${skippedCount} 个配置因格式无效或缺少名称而被跳过。`, true);
+                } else {
+                     showStatus(`上传的文件 "${file.name}" 中没有找到有效的配置数据。`, true);
+                }
+                console.log(`配置文件 "${file.name}" 处理完毕。导入: ${importedCount}, 跳过: ${skippedCount}`);
+
+            } catch (error) {
+                showStatus(`错误：解析或处理配置文件 "${file.name}" 失败: ${error.message}`, true);
+                console.error("解析上传的配置文件失败:", error);
+            } finally {
+                uploadConfigInput.value = ''; // 清空选择，以便可以再次选择同一个文件
+            }
+        };
+        reader.onerror = () => {
+            showStatus(`错误：读取文件 "${file.name}" 时发生错误。`, true);
+            uploadConfigInput.value = '';
+        };
+        reader.readAsText(file);
+    }
 
 });

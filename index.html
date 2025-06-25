@@ -7,6 +7,13 @@
     <link rel="stylesheet" href="style.css">
     <!-- 引入 Material Icons 以便使用图标 -->
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+   <!-- 引入 pdf.js 库用于解析PDF文件 -->
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <!-- 引入 marked.js 用于解析 Markdown -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- 引入 highlight.js 用于代码高亮 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
 <body>
     <div class="chatbot-container">
@@ -28,6 +35,9 @@
                 <button id="save-profile-button" title="保存当前配置">保存</button>
                 <button id="new-profile-button" title="新建配置名称">+</button>
                 <button id="delete-profile-button" title="删除选中配置">删除</button>
+                <button id="download-template-button" title="下载当前配置为模板">下载模板</button>
+                <input type="file" id="upload-config-input" accept=".json" style="display: none;">
+                <button id="upload-config-button" title="从文件加载配置">上传配置</button>
             </div>
              <div class="form-group">
                 <label for="profile-name-input">当前配置名称:</label>
@@ -71,8 +81,8 @@
             </div>
         </main>
         <footer class="input-area">
-             <!-- 文件上传按钮 (图片+文本) -->
-             <input type="file" id="file-upload-input" accept="image/*, .txt, .md, text/plain, text/markdown" style="display: none;">
+             <!-- 文件上传按钮 (图片+文本+PDF/Word/Excel) -->
+             <input type="file" id="file-upload-input" accept="image/*, .txt, .md, text/plain, text/markdown, application/pdf, application/vnd.openxmlformats-officedocument.wordprocessingml.document, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display: none;">
              <button id="file-upload-button" class="icon-button" title="上传图片或文本文件">
                  <span class="material-icons">attach_file</span> <!-- 改为通用文件图标 -->
              </button>
@@ -81,6 +91,14 @@
             <textarea id="user-input" placeholder="在这里输入您的问题..."></textarea>
             <button id="send-button">发送</button>
         </footer>
+    </div>
+<!-- HTML 预览模态窗口 (初始隐藏) -->
+    <div id="html-preview-modal" class="modal hidden">
+        <div class="modal-overlay" id="html-preview-overlay"></div>
+        <div class="modal-content">
+            <button id="close-preview-button" class="icon-button close-button" aria-label="关闭预览">&times;</button>
+            <iframe id="html-preview-iframe" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+        </div>
     </div>
     <script src="script.js" defer></script>
 </body>

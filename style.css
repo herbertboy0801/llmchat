@@ -197,6 +197,40 @@ header h1 {
 }
 
 /* --- 设置面板样式 --- */
+
+/* --- Markdown 和代码高亮样式 --- */
+
+/* 代码块的基本样式 */
+.model-message pre {
+    background-color: #f4f4f4; /* 代码块背景色 */
+    padding: 1em;
+    border-radius: 5px;
+    overflow-x: auto; /* 水平滚动 */
+    border: 1px solid #ddd;
+}
+
+/* 代码块内的代码 */
+.model-message pre code {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+    line-height: 1.5;
+}
+
+/* 内联代码样式 */
+.model-message code {
+    background-color: #eee;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9em;
+}
+
+/* 修正：确保 pre > code 没有内联代码的背景和 padding */
+.model-message pre > code {
+    background-color: transparent;
+    padding: 0;
+}
+
 .settings-panel {
     position: absolute; /* 或者 fixed，取决于是否希望它覆盖整个页面 */
     top: 60px; /* 假设header高度约为60px */
@@ -294,6 +328,13 @@ header h1 {
     font-size: 0.8em;
 }
 
+#download-template-button,
+#upload-config-button {
+    /* 与其他配置文件管理按钮保持一致 */
+    padding: 5px 8px;
+    font-size: 0.8em;
+}
+
 /* 状态消息 */
 .status-message {
     font-size: 0.85em;
@@ -331,4 +372,107 @@ header h1 {
     color: #dc3545; /* 醒目的红色 */
     font-size: 0.8em;
     margin-left: 5px;
+}
+/* --- HTML 预览模态窗口样式 --- */
+.modal {
+    position: fixed; /* 固定定位，覆盖整个屏幕 */
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000; /* 确保在顶层 */
+}
+
+.modal.hidden {
+    display: none; /* 初始隐藏 */
+}
+
+.modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6); /* 半透明黑色背景 */
+    cursor: pointer; /* 点击背景关闭 */
+}
+
+.modal-content {
+    position: relative;
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    width: 80%;
+    height: 70%;
+    max-width: 900px;
+    display: flex;
+    flex-direction: column;
+    z-index: 1001; /* 在遮罩层之上 */
+}
+
+.modal-content .close-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    font-size: 1.5em; /* 增大关闭按钮 */
+    line-height: 1;
+    padding: 5px;
+    color: #888;
+    background: none; /* 确保背景透明 */
+    border: none; /* 移除边框 */
+    cursor: pointer;
+}
+.modal-content .close-button:hover {
+    color: #333;
+}
+
+#html-preview-iframe {
+    flex-grow: 1; /* Iframe 占据剩余空间 */
+    border: 1px solid #ccc;
+    width: 100%;
+    height: 100%; /* 确保 iframe 填充 */
+    margin-top: 15px; /* 与关闭按钮保持距离 */
+}
+
+/* --- HTML 预览按钮样式 --- */
+.preview-html-button {
+    background-color: #6c757d; /* 灰色背景 */
+    color: white;
+    border: none;
+    padding: 4px 8px;
+    font-size: 0.8em;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 8px; /* 与消息内容保持距离 */
+    display: inline-flex; /* 使用 inline-flex 对齐图标和文本 */
+    align-items: center;
+    transition: background-color 0.2s ease;
+}
+
+.preview-html-button:hover {
+    background-color: #5a6268;
+}
+
+.preview-html-button .material-icons {
+    font-size: 1em; /* 图标大小与文字匹配 */
+    vertical-align: middle; /* 图标与文字对齐 */
+    margin-right: 3px;
+}
+
+/* 调整消息容器以容纳按钮 */
+.message {
+    /* display: flex;  <-- Revert: Flexbox makes align-self work differently */
+    /* flex-direction: column; <-- Revert */
+    /* Instead, let the button be block or inline-block and use align-self on the message itself */
+}
+/* .user-message and .model-message already handle align-self */
+
+/* 按钮容器（可选，用于布局） */
+.preview-button-container {
+     /* No specific styles needed now, button uses inline-flex */
+     margin-top: 5px; /* Add margin above button container */
 }
